@@ -3,12 +3,13 @@ import {
   decompressFromEncodedURIComponent,
 } from 'lz-string'
 import { emptyPeople, paidToInput, parsePaid, uid } from './format'
-import type { Person, SharePayload } from './types'
+import type { Person, SettlementState, SharePayload } from './types'
 
 export const STORAGE_KEY = 'verrekenen:v1'
 const HASH_PREFIX = 's='
 const MAX_PEOPLE = 50
 const MAX_NAME_LEN = 80
+const MAX_TITLE_LEN = 80
 const MAX_PAID = 1_000_000_000_000
 
 function isSharePayload(value: unknown): value is SharePayload {
@@ -16,6 +17,7 @@ function isSharePayload(value: unknown): value is SharePayload {
   const record = value as Record<string, unknown>
   if (record.v !== 1 || !Array.isArray(record.people)) return false
   if (record.people.length < 1 || record.people.length > MAX_PEOPLE) return false
+  if (record.title !== undefined && typeof record.title !== 'string') return false
   return record.people.every((person) => {
     if (typeof person !== 'object' || person === null) return false
     const row = person as Record<string, unknown>
@@ -30,6 +32,10 @@ function isSharePayload(value: unknown): value is SharePayload {
   })
 }
 
+function titleFromPayload(payload: SharePayload): string {
+  return (payload.title ?? '').slice(0, MAX_TITLE_LEN)
+}
+
 function peopleFromPayload(payload: SharePayload): Person[] {
   const people = payload.people.map((row) => ({
     id: uid(),
@@ -40,92 +46,101 @@ function peopleFromPayload(payload: SharePayload): Person[] {
   return people
 }
 
-export function encodePeople(people: Person[]): string {
+function stateFromPayload(payload: SharePayload): SettlementState {
+  return {
+    title: titleFromPayload(payload),
+    people: peopleFromPayload(payload),
+  }
+}
+
+function toPayload(state: SettlementState): SharePayload {
+  const title = state.title.trim().slice(0, MAX_TITLE_LEN)
   const payload: SharePayload = {
     v: 1,
-    people: people.slice(0, MAX_PEOPLE).map((person) => ({
+    people: state.people.slice(0, MAX_PEOPLE).map((person) => ({
       name: person.name.slice(0, MAX_NAME_LEN),
       paid: Math.min(MAX_PAID, Math.max(0, parsePaid(person.paid))),
     })),
   }
-  return compressToEncodedURIComponent(JSON.stringify(payload))
+  if (title) payload.title = title
+  return payload
 }
 
-export function decodePeople(raw: string): Person[] | null {
+function encodeState(state: SettlementState): string {
+  return compressToEncodedURIComponent(JSON.stringify(toPayload(state)))
+}
+
+function decodeState(raw: string): SettlementState | null {
   try {
     const json = decompressFromEncodedURIComponent(raw)
     if (!json) return null
     const parsed: unknown = JSON.parse(json)
     if (!isSharePayload(parsed)) return null
-    return peopleFromPayload(parsed)
+    return stateFromPayload(parsed)
   } catch {
     return null
   }
 }
 
-export function readHash(): Person[] | null {
+function emptyState(): SettlementState {
+  return { title: '', people: emptyPeople() }
+}
+
+export function readHash(): SettlementState | null {
   if (typeof window === 'undefined') return null
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash.startsWith(HASH_PREFIX)) return null
   const encoded = hash.slice(HASH_PREFIX.length)
   if (!encoded) return null
-  return decodePeople(encoded)
+  return decodeState(encoded)
 }
 
-export function writeHash(people: Person[]): void {
+export function writeHash(state: SettlementState): void {
   if (typeof window === 'undefined') return
-  const encoded = encodePeople(people)
   window.history.replaceState(
     null,
     '',
-    `${window.location.pathname}${window.location.search}#${HASH_PREFIX}${encoded}`,
+    `${window.location.pathname}${window.location.search}#${HASH_PREFIX}${encodeState(state)}`,
   )
 }
 
-export function loadFromLocalStorage(): Person[] | null {
+export function loadFromLocalStorage(): SettlementState | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const parsed: unknown = JSON.parse(raw)
     if (!isSharePayload(parsed)) return null
-    return peopleFromPayload(parsed)
+    return stateFromPayload(parsed)
   } catch {
     return null
   }
 }
 
-export function saveToLocalStorage(people: Person[]): void {
+export function saveToLocalStorage(state: SettlementState): void {
   if (typeof window === 'undefined') return
-  const payload: SharePayload = {
-    v: 1,
-    people: people.slice(0, MAX_PEOPLE).map((person) => ({
-      name: person.name.slice(0, MAX_NAME_LEN),
-      paid: Math.min(MAX_PAID, Math.max(0, parsePaid(person.paid))),
-    })),
-  }
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(toPayload(state)))
   } catch {
     // Quota of private mode: negeren.
   }
 }
 
-export function loadInitialPeople(): Person[] {
-  return readHash() ?? loadFromLocalStorage() ?? emptyPeople()
+export function loadInitialState(): SettlementState {
+  return readHash() ?? loadFromLocalStorage() ?? emptyState()
 }
 
-export function persistPeople(people: Person[]): void {
-  saveToLocalStorage(people)
-  writeHash(people)
+export function persistState(state: SettlementState): void {
+  saveToLocalStorage(state)
+  writeHash(state)
 }
 
-export function shareUrl(people: Person[]): string {
-  return `${window.location.origin}${window.location.pathname}${window.location.search}#${HASH_PREFIX}${encodePeople(people)}`
+export function shareUrl(state: SettlementState): string {
+  return `${window.location.origin}${window.location.pathname}${window.location.search}#${HASH_PREFIX}${encodeState(state)}`
 }
 
-export async function copyShareUrl(people: Person[]): Promise<boolean> {
-  const url = shareUrl(people)
+export async function copyShareUrl(state: SettlementState): Promise<boolean> {
+  const url = shareUrl(state)
   try {
     await navigator.clipboard.writeText(url)
     return true
