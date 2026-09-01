@@ -5,19 +5,28 @@ import BalanceList from './components/BalanceList.vue'
 import PersonTable from './components/PersonTable.vue'
 import SettlementList from './components/SettlementList.vue'
 import { emptyPerson, formatEuro, parsePaid } from './lib/format'
-import { copyShareUrl, loadInitialPeople, persistPeople, shareUrl } from './lib/persistence'
+import { copyShareUrl, loadInitialState, persistState, shareUrl } from './lib/persistence'
 import { computeSettlement } from './lib/settlement'
 
-const people = ref(loadInitialPeople())
-persistPeople(people.value)
+const initial = loadInitialState()
+const title = ref(initial.title)
+const people = ref(initial.people)
+
+function currentState() {
+  return { title: title.value, people: people.value }
+}
+
+persistState(currentState())
+document.title = pageTitle(title.value)
 
 const copied = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
 watch(
-  people,
-  (value) => {
-    persistPeople(value)
+  [title, people],
+  () => {
+    persistState(currentState())
+    document.title = pageTitle(title.value)
   },
   { deep: true },
 )
@@ -30,6 +39,11 @@ const parsed = computed(() =>
 )
 
 const result = computed(() => computeSettlement(parsed.value))
+
+function pageTitle(value: string): string {
+  const trimmed = value.trim()
+  return trimmed ? `${trimmed} · Wie betaalt wie` : 'Wie betaalt wie'
+}
 
 function updateName(id: string, name: string) {
   const person = people.value.find((row) => row.id === id)
@@ -52,9 +66,10 @@ function removePerson(id: string) {
 }
 
 async function copyLink() {
-  const ok = await copyShareUrl(people.value)
+  const state = currentState()
+  const ok = await copyShareUrl(state)
   if (!ok) {
-    window.prompt('Kopieer deze link:', shareUrl(people.value))
+    window.prompt('Kopieer deze link:', shareUrl(state))
     return
   }
   copied.value = true
@@ -69,10 +84,18 @@ async function copyLink() {
   <div class="min-h-dvh bg-zinc-100 text-zinc-900">
     <main class="mx-auto max-w-lg px-4 py-10 sm:py-14">
       <header class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight text-zinc-900">
+        <div class="min-w-0 flex-1">
+          <p class="text-xs font-medium tracking-wide text-zinc-400 uppercase">
             Wie betaalt wie
-          </h1>
+          </p>
+          <input
+            v-model="title"
+            type="text"
+            maxlength="80"
+            placeholder="Titel van de verrekening"
+            aria-label="Titel van de verrekening"
+            class="mt-1 w-full bg-transparent text-2xl font-semibold tracking-tight text-zinc-900 outline-none placeholder:text-zinc-300"
+          />
           <p class="mt-2 max-w-sm text-sm leading-relaxed text-zinc-500">
             Vul in wie wat in totaal heeft betaald. De kosten worden gelijk verdeeld
             en hieronder verschijnt het kleinst mogelijke aantal overboekingen.

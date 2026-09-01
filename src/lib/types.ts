@@ -26,5 +26,11 @@ export type Settlement = {
 
 export type SharePayload = {
   v: 1
+  title?: string
   people: { name: string; paid: number }[]
+}
+
+export type SettlementState = {
+  title: string
+  people: Person[]
 }
